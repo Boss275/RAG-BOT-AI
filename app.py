@@ -1,61 +1,34 @@
-import os
-import tempfile
 import streamlit as st
-from langchain.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
+from langchain.document_loaders import PyPDFLoader
+from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import FAISS
-from langchain.embeddings import OpenAIEmbeddings
+from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA
-from langchain.llms import OpenAI
 
-# Load API Key securely from Streamlit secrets
-openai_api_key = st.secrets["openai"]["api_key"]
-os.environ["OPENAI_API_KEY"] = openai_api_key
+st.title("📄 RAG PDF Chatbot")
 
-st.set_page_config(page_title="RAG AI Bot", layout="wide")
-st.title("📚 RAG AI Chatbot")
-st.write("Upload your documents and ask questions about them!")
+uploaded_file = st.file_uploader("Upload a PDF", type="pdf")
 
-uploaded_files = st.file_uploader("Upload PDF, TXT, or DOCX files", type=["pdf", "txt", "docx"], accept_multiple_files=True)
+if uploaded_file:
+    with open("temp.pdf", "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    
+    loader = PyPDFLoader("temp.pdf")
+    docs = loader.load()
 
-def load_documents(file_paths):
-    all_docs = []
-    for path in file_paths:
-        if path.endswith(".pdf"):
-            loader = PyPDFLoader(path)
-        elif path.endswith(".txt"):
-            loader = TextLoader(path)
-        elif path.endswith(".docx"):
-            loader = Docx2txtLoader(path)
-        else:
-            st.warning(f"❌ Unsupported file type: {path}")
-            continue
-        docs = loader.load()
-        all_docs.extend(docs)
-    return all_docs
+    splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    docs_split = splitter.split_documents(docs)
 
-if uploaded_files:
-    temp_paths = []
-    for uploaded_file in uploaded_files:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=uploaded_file.name) as tmp_file:
-            tmp_file.write(uploaded_file.read())
-            temp_paths.append(tmp_file.name)
+    embeddings = OpenAIEmbeddings()
+    vectordb = FAISS.from_documents(docs_split, embeddings)
 
-    with st.spinner("📄 Reading and parsing documents..."):
-        documents = load_documents(temp_paths)
+    llm = ChatOpenAI(temperature=0)
+    qa = RetrievalQA.from_chain_type(llm=llm, retriever=vectordb.as_retriever())
 
-    with st.spinner("🧠 Creating vector index..."):
-        embeddings = OpenAIEmbeddings()
-        vectordb = FAISS.from_documents(documents, embeddings)
-
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=OpenAI(temperature=0),
-        retriever=vectordb.as_retriever()
-    )
-
-    st.success("✅ Ready! Ask your questions.")
-    query = st.text_input("💬 Ask a question based on the uploaded docs:")
+    query = st.text_input("Ask a question about the PDF:")
 
     if query:
-        with st.spinner("🤖 Thinking..."):
-            answer = qa_chain.run(query)
-        st.markdown(f"**Answer:** {answer}")
+        answer = qa.run(query)
+        st.write("**Answer:**")
+        st.write(answer)
