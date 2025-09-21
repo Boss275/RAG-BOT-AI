@@ -1,8 +1,7 @@
 import os
 import tempfile
 import streamlit as st
-from typing import List, TypedDict
-
+from typing_extensions import List, TypedDict
 from langchain import hub
 from langchain_groq import ChatGroq
 from langchain_core.documents import Document
@@ -14,7 +13,6 @@ from langchain.vectorstores import FAISS
 from langgraph.graph import START, StateGraph
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import LLMChain
-
 from pdf2image import convert_from_path
 import pytesseract
 
@@ -23,8 +21,8 @@ class State(TypedDict):
     context: List[Document]
     answer: str
 
-st.set_page_config(page_title="RAG QNA", layout="wide", initial_sidebar_state="expanded")
-st.title("RAG QNA")
+st.set_page_config(page_title='RAG QNA', layout='wide', initial_sidebar_state='expanded')
+st.title('RAG QNA')
 st.caption("Upload PDF files and ask questions.")
 
 def ocr_pdf(path: str) -> List[Document]:
@@ -33,7 +31,7 @@ def ocr_pdf(path: str) -> List[Document]:
     for i, page in enumerate(pages):
         text = pytesseract.image_to_string(page, lang="eng")
         if text.strip():
-            docs.append(Document(page_content=text, metadata={"page": i + 1}))
+            docs.append(Document(page_content=text, metadata={"page": i+1}))
     return docs
 
 def split_text(files) -> List[Document]:
@@ -58,7 +56,7 @@ def get_embeddings():
 
 def get_vector(docs, emb):
     if not docs:
-        raise ValueError("No documents found")
+        raise ValueError("No documents to index")
     return FAISS.from_documents(documents=docs, embedding=emb)
 
 def retrieve(state: State, vs):
@@ -69,8 +67,8 @@ def generate(state: State):
     result = st.session_state.chain.invoke({"question": state["question"], "context": text})
     return {"answer": result["text"]}
 
-if "memory" not in st.session_state:
-    st.session_state.memory = {}
+if "mem" not in st.session_state:
+    st.session_state.mem = {}
 
 with st.sidebar:
     st.header("Settings")
@@ -78,13 +76,13 @@ with st.sidebar:
     model = st.selectbox("Model", ["qwen/qwen3-32b", "gemma2-9b-it", "openai/gpt-oss-120b"])
     temp = st.slider("Temperature", 0.0, 2.0, 0.7, 0.1)
     if st.button("New Session"):
-        sid = f"session_{len(st.session_state.memory)+1}"
-        st.session_state.memory[sid] = ConversationBufferMemory(memory_key="chat_history", input_key="question", return_messages=True)
+        sid = f"session_{len(st.session_state.mem)+1}"
+        st.session_state.mem[sid] = ConversationBufferMemory(memory_key="chat_history", input_key="question", return_messages=True)
         st.session_state.sid = sid
-    if not st.session_state.memory:
-        st.session_state.memory["default"] = ConversationBufferMemory(memory_key="chat_history", input_key="question", return_messages=True)
+    if not st.session_state.mem:
+        st.session_state.mem["default"] = ConversationBufferMemory(memory_key="chat_history", input_key="question", return_messages=True)
         st.session_state.sid = "default"
-    sid = st.selectbox("Select Session", list(st.session_state.memory.keys()), index=len(st.session_state.memory)-1)
+    sid = st.selectbox("Select Session", list(st.session_state.mem.keys()), index=len(st.session_state.mem)-1)
     st.session_state.sid = sid
 
 if not key:
@@ -98,23 +96,20 @@ if st.button("Process Files") and files:
     llm = ChatGroq(model=model, api_key=key, temperature=temp)
     parser = StrOutputParser()
     chain = llm | parser
-    st.session_state.chain = LLMChain(llm=chain, prompt=prompt, memory=st.session_state.memory[sid])
-
+    st.session_state.chain = LLMChain(llm=chain, prompt=prompt, memory=st.session_state.mem[sid])
     emb = get_embeddings()
     docs = split_text(files)
     vs = get_vector(docs, emb)
     vs.add_documents(docs)
-
     g = StateGraph(State)
     g.add_node("retrieve", lambda s: retrieve(s, vs))
     g.add_node("generate", generate)
     g.add_edge(START, "retrieve")
     g.add_edge("retrieve", "generate")
     st.session_state.graph = g
+    st.success("Documents processed. You can ask questions.")
 
-    st.success("Files processed, you can ask questions now.")
-
-if history := st.session_state.memory[sid].chat_memory.messages:
+if history := st.session_state.mem[sid].chat_memory.messages:
     for m in history:
         if m.type == "human":
             with st.chat_message("user"):
@@ -130,7 +125,7 @@ if "graph" in st.session_state:
         with st.chat_message("assistant"):
             with st.spinner("Processing..."):
                 r = st.session_state.graph.invoke({"question": q})
-                with st.expander("Preview Context"):
+                with st.expander("Context Preview"):
                     for d in r["context"]:
                         st.write(d.page_content[:500]+"...")
                 st.subheader("Answer:")
