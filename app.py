@@ -1,9 +1,8 @@
 import os
 import tempfile
 import streamlit as st
-import pytesseract
-from pdf2image import convert_from_path
-from typing_extensions import List, TypedDict
+from typing import List, TypedDict
+
 from langchain import hub
 from langchain_groq import ChatGroq
 from langchain_core.documents import Document
@@ -16,128 +15,123 @@ from langgraph.graph import START, StateGraph
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import LLMChain
 
+from pdf2image import convert_from_path
+import pytesseract
+
 class State(TypedDict):
-    q: str
-    ctx: List[Document]
-    ans: str
+    question: str
+    context: List[Document]
+    answer: str
 
-st.set_page_config(page_title='RAG QNA', layout='wide')
+st.set_page_config(page_title="RAG QNA", layout="wide", initial_sidebar_state="expanded")
 st.title("RAG QNA")
-st.caption("Upload PDFs and ask questions.")
+st.caption("Upload PDF files and ask questions.")
 
-def ocr_pdf(path):
+def ocr_pdf(path: str) -> List[Document]:
     pages = convert_from_path(path)
-    out = []
-    for i, p in enumerate(pages):
-        t = pytesseract.image_to_string(p, lang="eng")
-        if t.strip():
-            out.append(Document(page_content=t, metadata={"pg": i + 1}))
-    return out
+    docs = []
+    for i, page in enumerate(pages):
+        text = pytesseract.image_to_string(page, lang="eng")
+        if text.strip():
+            docs.append(Document(page_content=text, metadata={"page": i + 1}))
+    return docs
 
-def split_pdfs(files):
+def split_text(files) -> List[Document]:
     chunks = []
     for f in files:
-        tmp_path = None
-        try:
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(f.read())
             tmp_path = tmp.name
-            tmp.close()
-
+        try:
             loader = PyPDFLoader(tmp_path)
             docs = loader.load()
             if all("studyplusplus" in d.page_content.lower() for d in docs):
-                st.warning(f"OCR fallback for {f.name}")
                 docs = ocr_pdf(tmp_path)
-
-            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-            chunks.extend(splitter.split_documents(docs))
         finally:
-            if tmp_path: os.remove(tmp_path)
+            os.remove(tmp_path)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200, add_start_index=True)
+        chunks.extend(splitter.split_documents(docs))
     return chunks
 
-def get_emb():
-    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2", model_kwargs={"device":"cpu"})
+def get_embeddings():
+    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2", model_kwargs={"device": "cpu"})
 
-def build_store(emb, docs):
-    if not docs: raise ValueError("No docs for FAISS")
-    return FAISS.from_documents(docs, emb)
+def get_vector(docs, emb):
+    if not docs:
+        raise ValueError("No documents found")
+    return FAISS.from_documents(documents=docs, embedding=emb)
 
-def retr(state, store):
-    return {"ctx": store.similarity_search(state["q"], k=3)}
+def retrieve(state: State, vs):
+    return {"context": vs.similarity_search(state["question"], k=3)}
 
-def gen_ans(state):
-    c = "\n\n".join(d.page_content for d in state["ctx"])
-    r = st.session_state.chain.invoke({"question": state["q"], "context": c})
-    a = r["text"].replace("Answer:", "").replace("answer:", "").strip()
-    return {"ans": f"{a[:10]}... basically: {a[-50:]}"}
+def generate(state: State):
+    text = "\n\n".join(doc.page_content for doc in state["context"])
+    result = st.session_state.chain.invoke({"question": state["question"], "context": text})
+    return {"answer": result["text"]}
 
-if "sess" not in st.session_state:
-    st.session_state.sess = {}
+if "memory" not in st.session_state:
+    st.session_state.memory = {}
 
 with st.sidebar:
-    st.title("Setup")
-    k = st.text_input("API Key")
-    m = st.selectbox("Model", ["qwen/qwen3-32b", "gemma2-9b-it", "openai/gpt-oss-120b"])
-    t = st.slider("Temp", 0.0, 2.0, 0.7, 0.1)
-    
+    st.header("Settings")
+    key = st.text_input("Groq API Key", type="password", value=st.secrets["general"]["GROQ_KEY"])
+    model = st.selectbox("Model", ["qwen/qwen3-32b", "gemma2-9b-it", "openai/gpt-oss-120b"])
+    temp = st.slider("Temperature", 0.0, 2.0, 0.7, 0.1)
     if st.button("New Session"):
-        sid = f"sess_{len(st.session_state.sess) + 1}"
-        st.session_state.sess[sid] = ConversationBufferMemory(memory_key="chat_history", input_key='q', return_messages=True)
+        sid = f"session_{len(st.session_state.memory)+1}"
+        st.session_state.memory[sid] = ConversationBufferMemory(memory_key="chat_history", input_key="question", return_messages=True)
         st.session_state.sid = sid
+    if not st.session_state.memory:
+        st.session_state.memory["default"] = ConversationBufferMemory(memory_key="chat_history", input_key="question", return_messages=True)
+        st.session_state.sid = "default"
+    sid = st.selectbox("Select Session", list(st.session_state.memory.keys()), index=len(st.session_state.memory)-1)
+    st.session_state.sid = sid
 
-    if not st.session_state.sess:
-        st.session_state.sess["def"] = ConversationBufferMemory(memory_key="chat_history", input_key='q', return_messages=True)
-        st.session_state.sid = "def"
-
-    sel = st.selectbox("Select Session", list(st.session_state.sess.keys()), index=len(st.session_state.sess)-1)
-    st.session_state.sid = sel
-
-if not k:
+if not key:
     st.warning("Enter API key")
     st.stop()
 
-fs = st.file_uploader("Upload PDFs:", accept_multiple_files=True)
+files = st.file_uploader("Upload PDFs", accept_multiple_files=True)
 
-if st.button("Process") and fs:
-    with st.spinner("Processing..."):
-        prompt = hub.pull("rlm/rag-prompt")
-        llm = ChatGroq(model=m, api_key=k, temperature=t)
-        parser = StrOutputParser()
-        chain = llm | parser
-        st.session_state.chain = LLMChain(llm=chain, prompt=prompt, memory=st.session_state.sess[st.session_state.sid])
+if st.button("Process Files") and files:
+    prompt = hub.pull("rlm/rag-prompt")
+    llm = ChatGroq(model=model, api_key=key, temperature=temp)
+    parser = StrOutputParser()
+    chain = llm | parser
+    st.session_state.chain = LLMChain(llm=chain, prompt=prompt, memory=st.session_state.memory[sid])
 
-        emb = get_emb()
-        docs = split_pdfs(fs)
-        store = build_store(emb, docs)
-        store.add_documents(docs)
+    emb = get_embeddings()
+    docs = split_text(files)
+    vs = get_vector(docs, emb)
+    vs.add_documents(docs)
 
-        g = StateGraph(State)
-        g.add_node("ret", lambda s: retr(s, store))
-        g.add_node("gen", gen_ans)
-        g.add_edge(START, "ret")
-        g.add_edge("ret", "gen")
-        st.session_state.g = g.compile()
-        st.success("PDFs ready. Ask questions.")
+    g = StateGraph(State)
+    g.add_node("retrieve", lambda s: retrieve(s, vs))
+    g.add_node("generate", generate)
+    g.add_edge(START, "retrieve")
+    g.add_edge("retrieve", "generate")
+    st.session_state.graph = g
 
-if hist := st.session_state.sess[st.session_state.sid].chat_memory.messages:
-    for msg in hist:
-        if msg.type == "human":
+    st.success("Files processed, you can ask questions now.")
+
+if history := st.session_state.memory[sid].chat_memory.messages:
+    for m in history:
+        if m.type == "human":
             with st.chat_message("user"):
-                st.markdown(msg.content)
-        elif msg.type == "ai":
+                st.markdown(m.content)
+        elif m.type == "ai":
             with st.chat_message("assistant"):
-                st.markdown(msg.content)
+                st.markdown(m.content)
 
-if "g" in st.session_state:
+if "graph" in st.session_state:
     if q := st.chat_input("Ask a question:"):
         with st.chat_message("user"):
             st.markdown(q)
         with st.chat_message("assistant"):
-            with st.spinner("Searching..."):
-                res = st.session_state.g.invoke({"q": q})
-                with st.expander("Preview"):
-                    for d in res["ctx"]:
-                        st.write(f"{d.page_content[:200]}...")
+            with st.spinner("Processing..."):
+                r = st.session_state.graph.invoke({"question": q})
+                with st.expander("Preview Context"):
+                    for d in r["context"]:
+                        st.write(d.page_content[:500]+"...")
                 st.subheader("Answer:")
-                st.markdown(res["ans"])
+                st.markdown(r["answer"])
