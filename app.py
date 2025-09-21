@@ -1,4 +1,3 @@
-pip install -U langchain-community
 import streamlit as st
 from langchain.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
