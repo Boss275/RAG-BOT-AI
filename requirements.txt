@@ -8,3 +8,4 @@ sentence-transformers>=2.2.2
 langchain>=0.3.27
 streamlit>=1.49.1
 langchain-huggingface>=0.0.10
+langchain-huggingface
