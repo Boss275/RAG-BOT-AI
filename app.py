@@ -81,29 +81,27 @@ if uploaded_files:
         )
         llm = HuggingFacePipeline(pipeline=pipe)
 
-        from langchain.prompts import PromptTemplate
+from langchain.prompts import PromptTemplate
 
-        prompt_template = """
-You are a helpful assistant. Use the following context to answer the question.
+prompt = PromptTemplate(
+    input_variables=["context", "question"],
+    template="""
+You are a helpful assistant. Use the context below to answer the question concisely.
 If the answer is not in the context, say "I don't know".
 
 Context:
 {context}
 
-Question:
-{question}
+Question: {question}
+Answer:"""
+)
 
-Answer:
-"""
-        PROMPT = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-
-        qa = RetrievalQA.from_chain_type(
-            llm=llm,
-            retriever=st.session_state.vectordb.as_retriever(search_kwargs={"k": 5}),
-            chain_type="stuff",
-            chain_type_kwargs={"prompt": PROMPT},
-        )
-
+qa = RetrievalQA.from_chain_type(
+    llm=llm,
+    retriever=st.session_state.vectordb.as_retriever(),
+    chain_type="map_reduce",
+    chain_type_kwargs={"prompt": prompt}
+)
         query = st.text_input("Ask a question about the uploaded PDFs:")
 
         if query:
