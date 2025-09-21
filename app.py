@@ -118,15 +118,20 @@ if history := st.session_state.mem[sid].chat_memory.messages:
             with st.chat_message("assistant"):
                 st.markdown(m.content)
 
-if "graph" in st.session_state:
+if "graph" in st.session_state and st.session_state.graph:
     if q := st.chat_input("Ask a question:"):
         with st.chat_message("user"):
             st.markdown(q)
         with st.chat_message("assistant"):
             with st.spinner("Processing..."):
-                r = st.session_state.graph.invoke({"question": q})
-                with st.expander("Context Preview"):
-                    for d in r["context"]:
-                        st.write(d.page_content[:500]+"...")
-                st.subheader("Answer:")
-                st.markdown(r["answer"])
+                try:
+                    r = st.session_state.graph.invoke({"question": q})
+                    with st.expander("Context Preview"):
+                        for d in r["context"]:
+                            st.write(d.page_content[:500]+"...")
+                    st.subheader("Answer:")
+                    st.markdown(r["answer"])
+                except Exception as e:
+                    st.error(f"Graph processing failed: {e}")
+else:
+    st.info("Please process files first to initialize the graph.")
