@@ -23,8 +23,18 @@ def embed_documents_with_retry(embeddings, texts):
 @st.cache_resource
 def load_vectorstore(files):
     all_docs = []
+    temp_dir = "/tmp/pdf_uploads"
+    
+    if not os.path.exists(temp_dir):
+        os.makedirs(temp_dir)
+
     for file in files:
-        loader = PyPDFLoader(file)
+        file_path = os.path.join(temp_dir, file.name)
+
+        with open(file_path, "wb") as f:
+            f.write(file.getbuffer())
+
+        loader = PyPDFLoader(file_path)
         docs = loader.load()
         splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
         docs_split = splitter.split_documents(docs)
