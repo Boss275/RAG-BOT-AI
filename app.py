@@ -74,9 +74,9 @@ if "mems" not in st.session_state:
 
 with st.sidebar:
     st.title("Settings")
-    key = st.text_input("Enter Groq API Key", type="password")
-    model = st.selectbox("Select Model", ["qwen/qwen3-32b", "gemma2-9b-it", "openai/gpt-oss-120b"])
-    temp = st.slider("Temperature", 0.0, 2.0, 0.7, 0.1)
+    key = st.text_input("Enter Groq API Key:", type="password")
+    model = st.selectbox("Select Model:", ["qwen/qwen3-32b", "gemma2-9b-it", "openai/gpt-oss-120b"])
+    temp = st.slider("Temp:", 0.0, 2.0, 0.7, 0.1)
     if st.button("New Session"):
         sid = f"session_{len(st.session_state.mems)+1}"
         st.session_state.mems[sid] = ConversationBufferMemory(memory_key="chat_history", input_key="question", return_messages=True)
