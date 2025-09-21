@@ -1,129 +1,143 @@
 import os
+import tempfile
 import streamlit as st
+import pytesseract
+from pdf2image import convert_from_path
+from typing_extensions import List, TypedDict
+from langchain import hub
+from langchain_groq import ChatGroq
+from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_huggingface.huggingface import HuggingFaceEmbeddings
-from langchain.chains import RetrievalQA
-from langchain_community.llms import HuggingFacePipeline
-from transformers import pipeline
-from langchain.prompts import PromptTemplate
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.vectorstores import FAISS
+from langgraph.graph import START, StateGraph
+from langchain.memory import ConversationBufferMemory
+from langchain.chains import LLMChain
 
-st.title("📄 RAG PDF Chatbot (Local Hugging Face)")
+class State(TypedDict):
+    q: str
+    ctx: List[Document]
+    ans: str
 
-hf_token = st.secrets["HUGGINGFACE_API_TOKEN"]
+st.set_page_config(page_title='RAG QNA', layout='wide')
+st.title("RAG QNA")
+st.caption("Upload PDFs and ask questions.")
 
-uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
+def ocr_pdf(path):
+    pages = convert_from_path(path)
+    out = []
+    for i, p in enumerate(pages):
+        t = pytesseract.image_to_string(p, lang="eng")
+        if t.strip():
+            out.append(Document(page_content=t, metadata={"pg": i + 1}))
+    return out
 
-@st.cache_resource
-def load_vectorstore(files):
-    all_docs = []
-    temp_dir = "/tmp/pdf_uploads"
-    os.makedirs(temp_dir, exist_ok=True)
-
-    for file in files:
-        file_path = os.path.join(temp_dir, file.name)
-        with open(file_path, "wb") as f:
-            f.write(file.getbuffer())
-
+def split_pdfs(files):
+    chunks = []
+    for f in files:
+        tmp_path = None
         try:
-            loader = PyPDFLoader(file_path)
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+            tmp.write(f.read())
+            tmp_path = tmp.name
+            tmp.close()
+
+            loader = PyPDFLoader(tmp_path)
             docs = loader.load()
-            if not docs:
-                st.warning(f"No content found in {file.name}. Skipping.")
-                continue
+            if all("studyplusplus" in d.page_content.lower() for d in docs):
+                st.warning(f"OCR fallback for {f.name}")
+                docs = ocr_pdf(tmp_path)
 
-            splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-            docs_split = splitter.split_documents(docs)
-            if not docs_split:
-                st.warning(f"No text chunks found after splitting {file.name}. Skipping.")
-                continue
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            chunks.extend(splitter.split_documents(docs))
+        finally:
+            if tmp_path: os.remove(tmp_path)
+    return chunks
 
-            all_docs.extend(docs_split)
-        except Exception as e:
-            st.error(f"Error processing file {file.name}: {e}")
-            continue
+def get_emb():
+    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2", model_kwargs={"device":"cpu"})
 
-    if not all_docs:
-        st.error("No documents to process after splitting PDFs.")
-        return None
+def build_store(emb, docs):
+    if not docs: raise ValueError("No docs for FAISS")
+    return FAISS.from_documents(docs, emb)
 
-    try:
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={"device": "cpu"},
-            cache_folder="/tmp/hf_embeddings",
-        )
-    except Exception as e:
-        st.error(f"Error initializing embeddings: {e}")
-        return None
+def retr(state, store):
+    return {"ctx": store.similarity_search(state["q"], k=3)}
 
-    try:
-        vectordb = FAISS(embedding_function=embeddings.embed_query, index=None)
-        batch_size = 64
-        for i in range(0, len(all_docs), batch_size):
-            batch_docs = all_docs[i:i+batch_size]
-            batch_vectors = embeddings.embed_documents([d.page_content for d in batch_docs])
-            vectordb.add_documents(batch_docs, batch_vectors)
-    except Exception as e:
-        st.error(f"Error creating vectorstore: {e}")
-        return None
+def gen_ans(state):
+    c = "\n\n".join(d.page_content for d in state["ctx"])
+    r = st.session_state.chain.invoke({"question": state["q"], "context": c})
+    a = r["text"].replace("Answer:", "").replace("answer:", "").strip()
+    return {"ans": f"{a[:10]}... basically: {a[-50:]}"}
 
-    return vectordb
+if "sess" not in st.session_state:
+    st.session_state.sess = {}
 
-if "vectordb" not in st.session_state:
-    st.session_state.vectordb = None
+with st.sidebar:
+    st.title("Setup")
+    k = st.text_input("API Key")
+    m = st.selectbox("Model", ["qwen/qwen3-32b", "gemma2-9b-it", "openai/gpt-oss-120b"])
+    t = st.slider("Temp", 0.0, 2.0, 0.7, 0.1)
+    
+    if st.button("New Session"):
+        sid = f"sess_{len(st.session_state.sess) + 1}"
+        st.session_state.sess[sid] = ConversationBufferMemory(memory_key="chat_history", input_key='q', return_messages=True)
+        st.session_state.sid = sid
 
-if uploaded_files:
-    with st.spinner("Processing your documents..."):
-        vectordb = load_vectorstore(uploaded_files)
-        if vectordb is None:
-            st.error("Failed to process and embed documents.")
-        else:
-            st.session_state.vectordb = vectordb
-            st.success("✅ Documents processed and ready!")
+    if not st.session_state.sess:
+        st.session_state.sess["def"] = ConversationBufferMemory(memory_key="chat_history", input_key='q', return_messages=True)
+        st.session_state.sid = "def"
 
-if st.session_state.vectordb:
-    pipe = pipeline(
-        "text-generation",
-        model="tiiuae/falcon-7b-instruct",
-        tokenizer="tiiuae/falcon-7b-instruct",
-        device=-1,
-        max_length=512,
-        temperature=0.1,
-        use_auth_token=hf_token
-    )
-    llm = HuggingFacePipeline(pipeline=pipe)
+    sel = st.selectbox("Select Session", list(st.session_state.sess.keys()), index=len(st.session_state.sess)-1)
+    st.session_state.sid = sel
 
-    prompt = PromptTemplate(
-        input_variables=["context", "question"],
-        template="""
-You are a helpful assistant. Use the context below to answer the question concisely.
-If the answer is not in the context, say "I don't know".
+if not k:
+    st.warning("Enter API key")
+    st.stop()
 
-Context:
-{context}
+fs = st.file_uploader("Upload PDFs:", accept_multiple_files=True)
 
-Question: {question}
-Answer:"""
-    )
+if st.button("Process") and fs:
+    with st.spinner("Processing..."):
+        prompt = hub.pull("rlm/rag-prompt")
+        llm = ChatGroq(model=m, api_key=k, temperature=t)
+        parser = StrOutputParser()
+        chain = llm | parser
+        st.session_state.chain = LLMChain(llm=chain, prompt=prompt, memory=st.session_state.sess[st.session_state.sid])
 
-    qa = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=st.session_state.vectordb.as_retriever(),
-        chain_type="map_reduce",
-        chain_type_kwargs={"prompt": prompt}
-    )
+        emb = get_emb()
+        docs = split_pdfs(fs)
+        store = build_store(emb, docs)
+        store.add_documents(docs)
 
-    query = st.text_input("Ask a question about the uploaded PDFs:")
+        g = StateGraph(State)
+        g.add_node("ret", lambda s: retr(s, store))
+        g.add_node("gen", gen_ans)
+        g.add_edge(START, "ret")
+        g.add_edge("ret", "gen")
+        st.session_state.g = g.compile()
+        st.success("PDFs ready. Ask questions.")
 
-    if query:
-        with st.spinner("Generating answer..."):
-            try:
-                answer = qa.run(query)
-                st.write("**Answer:**")
-                st.write(answer)
-            except Exception as e:
-                st.error(f"Error generating answer: {e}")
-else:
-    st.warning("Please upload one or more PDFs to get started.")
+if hist := st.session_state.sess[st.session_state.sid].chat_memory.messages:
+    for msg in hist:
+        if msg.type == "human":
+            with st.chat_message("user"):
+                st.markdown(msg.content)
+        elif msg.type == "ai":
+            with st.chat_message("assistant"):
+                st.markdown(msg.content)
+
+if "g" in st.session_state:
+    if q := st.chat_input("Ask a question:"):
+        with st.chat_message("user"):
+            st.markdown(q)
+        with st.chat_message("assistant"):
+            with st.spinner("Searching..."):
+                res = st.session_state.g.invoke({"q": q})
+                with st.expander("Preview"):
+                    for d in res["ctx"]:
+                        st.write(f"{d.page_content[:200]}...")
+                st.subheader("Answer:")
+                st.markdown(res["ans"])
