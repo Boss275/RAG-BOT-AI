@@ -5,4 +5,5 @@ faiss-cpu
 torch
 transformers
 sentence-transformers
+pypdf
 accelerate
