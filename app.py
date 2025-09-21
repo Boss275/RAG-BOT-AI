@@ -22,8 +22,8 @@ class S(TypedDict):
     answer: str
 
 st.set_page_config(page_title="RAG PDF Q&A", layout="wide")
-st.title("RAG PDF Q&A")
-st.caption("Upload PDFs and ask questions. Powered by Groq + LangChain.")
+st.title("RAG AI BOT")
+st.caption("Upload PDFs and ask questions about them.")
 
 def ocr_pdf(path: str) -> List[Document]:
     pages = convert_from_path(path)
@@ -73,8 +73,8 @@ if "mems" not in st.session_state:
     st.session_state.mems = {}
 
 with st.sidebar:
-    st.title("Configuration")
-    key = st.text_input("Groq API Key", type="password")
+    st.title("Settings")
+    key = st.text_input("Enter Groq API Key", type="password")
     model = st.selectbox("Select Model", ["qwen/qwen3-32b", "gemma2-9b-it", "openai/gpt-oss-120b"])
     temp = st.slider("Temperature", 0.0, 2.0, 0.7, 0.1)
     if st.button("New Session"):
@@ -88,12 +88,12 @@ with st.sidebar:
     st.session_state.sid = sid
 
 if not key:
-    st.warning("API key required")
+    st.warning("Please enter API Key")
     st.stop()
 
-files = st.file_uploader("Upload PDFs", accept_multiple_files=True)
-if st.button("Process PDFs") and files:
-    with st.spinner("Processing PDFs..."):
+files = st.file_uploader("Upload your desired PDF(s)", accept_multiple_files=True)
+if st.button("Process your PDF(s)") and files:
+    with st.spinner("Processing!"):
         p = hub.pull("rlm/rag-prompt")
         llm = ChatGroq(model=model, api_key=key, temperature=temp)
         parser = StrOutputParser()
@@ -108,7 +108,7 @@ if st.button("Process PDFs") and files:
         g.add_edge(START, "retrieve")
         g.add_edge("retrieve", "generate")
         st.session_state.graph = g.compile()
-        st.success("PDFs processed. You can ask questions now.")
+        st.success("The PDF(s) are now processed, please ask questions")
 
 if h := st.session_state.mems[st.session_state.sid].chat_memory.messages:
     for m in h:
