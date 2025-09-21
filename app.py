@@ -4,8 +4,9 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.chat_models import HuggingFaceChat
 from langchain.chains import RetrievalQA
+from langchain.llms import HuggingFacePipeline
+from transformers import pipeline
 
 st.title("📄 RAG PDF Chatbot (Hugging Face)")
 
@@ -27,16 +28,14 @@ def load_vectorstore(files):
         try:
             loader = PyPDFLoader(file_path)
             docs = loader.load()
-
             if not docs:
-                st.warning(f"No content found in {file.name}. Skipping this file.")
+                st.warning(f"No content found in {file.name}. Skipping.")
                 continue
 
             splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
             docs_split = splitter.split_documents(docs)
-
             if not docs_split:
-                st.warning(f"No text chunks found after splitting {file.name}. Skipping this file.")
+                st.warning(f"No text chunks found after splitting {file.name}. Skipping.")
                 continue
 
             all_docs.extend(docs_split)
@@ -45,7 +44,7 @@ def load_vectorstore(files):
             continue
 
     if not all_docs:
-        st.error("No documents to process after splitting. Please check the uploaded PDFs.")
+        st.error("No documents to process after splitting PDFs.")
         return None
 
     try:
@@ -67,19 +66,23 @@ if "vectordb" not in st.session_state:
 if uploaded_files:
     with st.spinner("Processing your documents..."):
         vectordb = load_vectorstore(uploaded_files)
-
         if vectordb is None:
-            st.error("Failed to process and embed the documents.")
+            st.error("Failed to process and embed documents.")
         else:
             st.session_state.vectordb = vectordb
-            st.success("✅ Documents processed and ready for querying!")
+            st.success("✅ Documents processed and ready!")
 
     if st.session_state.vectordb:
-        llm = HuggingFaceChat(
-            model_name="tiiuae/falcon-7b-instruct",
-            api_token=hf_token,
-            temperature=0
+        pipe = pipeline(
+            "text-generation",
+            model="tiiuae/falcon-7b-instruct",
+            tokenizer="tiiuae/falcon-7b-instruct",
+            device=-1,  
+            max_length=512,
+            temperature=0,
+            use_auth_token=hf_token
         )
+        llm = HuggingFacePipeline(pipeline=pipe)
 
         qa = RetrievalQA.from_chain_type(
             llm=llm,
