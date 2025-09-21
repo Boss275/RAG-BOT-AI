@@ -10,15 +10,15 @@ from langchain.chains import RetrievalQA
 st.title("📄 RAG PDF Chatbot")
 
 api_key = st.secrets["OPENAI_API_KEY"]
+org_id = st.secrets.get("OPENAI_ORG_ID", None)
 
 uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
 
 @st.cache_resource
 def load_vectorstore(files):
-    """Load, split, embed PDFs into a FAISS vectorstore"""
+    """Load, split, and embed PDFs into a FAISS vectorstore"""
     all_docs = []
     temp_dir = "/tmp/pdf_uploads"
-
     os.makedirs(temp_dir, exist_ok=True)
 
     for file in files:
@@ -51,7 +51,11 @@ def load_vectorstore(files):
         return None
 
     try:
-        embeddings = OpenAIEmbeddings(openai_api_key=api_key)
+        embeddings = OpenAIEmbeddings(
+            model="text-embedding-3-small",
+            api_key=api_key,
+            organization=org_id
+        )
         vectordb = FAISS.from_documents(all_docs, embeddings)
     except Exception as e:
         st.error(f"Error creating vectorstore: {e}")
@@ -59,13 +63,14 @@ def load_vectorstore(files):
 
     return vectordb
 
+
 if "vectordb" not in st.session_state:
     st.session_state.vectordb = None
 
 if uploaded_files:
     with st.spinner("Processing your documents..."):
         vectordb = load_vectorstore(uploaded_files)
-        
+
         if vectordb is None:
             st.error("Failed to process and embed the documents.")
         else:
@@ -73,7 +78,13 @@ if uploaded_files:
             st.success("✅ Documents processed and ready for querying!")
 
     if st.session_state.vectordb:
-        llm = ChatOpenAI(openai_api_key=api_key, temperature=0)
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",    
+            api_key=api_key,
+            organization=org_id,
+            temperature=0
+        )
+
         qa = RetrievalQA.from_chain_type(
             llm=llm, retriever=st.session_state.vectordb.as_retriever()
         )
