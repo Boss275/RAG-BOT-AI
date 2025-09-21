@@ -3,24 +3,20 @@ import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_huggingface.huggingface import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQA
 from langchain_community.llms import HuggingFacePipeline
 from transformers import pipeline
 from langchain.prompts import PromptTemplate
 
-st.set_page_config(page_title="📄 RAG PDF Chatbot", layout="wide")
 st.title("📄 RAG PDF Chatbot (Local Hugging Face)")
 
 hf_token = st.secrets["HUGGINGFACE_API_TOKEN"]
 
-uploaded_files = st.file_uploader(
-    "Upload PDFs", type="pdf", accept_multiple_files=True
-)
+uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
 
 @st.cache_resource
 def load_vectorstore(files):
-    """Load PDFs, split into chunks, embed, and create FAISS vectorstore."""
     all_docs = []
     temp_dir = "/tmp/pdf_uploads"
     os.makedirs(temp_dir, exist_ok=True)
@@ -37,7 +33,7 @@ def load_vectorstore(files):
                 st.warning(f"No content found in {file.name}. Skipping.")
                 continue
 
-            splitter = CharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+            splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
             docs_split = splitter.split_documents(docs)
             if not docs_split:
                 st.warning(f"No text chunks found after splitting {file.name}. Skipping.")
@@ -58,7 +54,17 @@ def load_vectorstore(files):
             model_kwargs={"device": "cpu"},
             cache_folder="/tmp/hf_embeddings",
         )
-        vectordb = FAISS.from_documents(all_docs, embeddings)
+    except Exception as e:
+        st.error(f"Error initializing embeddings: {e}")
+        return None
+
+    try:
+        vectordb = FAISS(embedding_function=embeddings.embed_query, index=None)
+        batch_size = 64
+        for i in range(0, len(all_docs), batch_size):
+            batch_docs = all_docs[i:i+batch_size]
+            batch_vectors = embeddings.embed_documents([d.page_content for d in batch_docs])
+            vectordb.add_documents(batch_docs, batch_vectors)
     except Exception as e:
         st.error(f"Error creating vectorstore: {e}")
         return None
@@ -83,9 +89,8 @@ if st.session_state.vectordb:
         model="tiiuae/falcon-7b-instruct",
         tokenizer="tiiuae/falcon-7b-instruct",
         device=-1,
-        max_new_tokens=1024,
+        max_length=512,
         temperature=0.1,
-        do_sample=False,
         use_auth_token=hf_token
     )
     llm = HuggingFacePipeline(pipeline=pipe)
@@ -93,20 +98,20 @@ if st.session_state.vectordb:
     prompt = PromptTemplate(
         input_variables=["context", "question"],
         template="""
-You are a helpful assistant. Use the context below to answer the question in full sentences and provide complete explanations.
+You are a helpful assistant. Use the context below to answer the question concisely.
 If the answer is not in the context, say "I don't know".
 
 Context:
 {context}
 
 Question: {question}
-Answer:""",
+Answer:"""
     )
 
     qa = RetrievalQA.from_chain_type(
         llm=llm,
         retriever=st.session_state.vectordb.as_retriever(),
-        chain_type="stuff",
+        chain_type="map_reduce",
         chain_type_kwargs={"prompt": prompt}
     )
 
@@ -116,8 +121,8 @@ Answer:""",
         with st.spinner("Generating answer..."):
             try:
                 answer = qa.run(query)
-                st.markdown("**Answer:**")
-                st.markdown(answer)
+                st.write("**Answer:**")
+                st.write(answer)
             except Exception as e:
                 st.error(f"Error generating answer: {e}")
 else:
