@@ -31,8 +31,12 @@ def load_vectorstore(files):
         try:
             loader = PyPDFLoader(file_path)
             docs = loader.load()
+
+            # Ensure that each doc is text (sometimes PyPDFLoader may return something else)
+            docs_text = [doc.page_content for doc in docs]
+            
             splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-            docs_split = splitter.split_documents(docs)
+            docs_split = splitter.split_documents(docs_text)
             all_docs.extend(docs_split)
         except Exception as e:
             st.error(f"Error processing file {file.name}: {e}")
