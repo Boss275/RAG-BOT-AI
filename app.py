@@ -9,14 +9,18 @@ from langchain_community.llms import HuggingFacePipeline
 from transformers import pipeline
 from langchain.prompts import PromptTemplate
 
+st.set_page_config(page_title="📄 RAG PDF Chatbot", layout="wide")
 st.title("📄 RAG PDF Chatbot (Local Hugging Face)")
 
 hf_token = st.secrets["HUGGINGFACE_API_TOKEN"]
 
-uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    "Upload PDFs", type="pdf", accept_multiple_files=True
+)
 
 @st.cache_resource
 def load_vectorstore(files):
+    """Load PDFs, split into chunks, embed, and create FAISS vectorstore."""
     all_docs = []
     temp_dir = "/tmp/pdf_uploads"
     os.makedirs(temp_dir, exist_ok=True)
@@ -33,7 +37,7 @@ def load_vectorstore(files):
                 st.warning(f"No content found in {file.name}. Skipping.")
                 continue
 
-            splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+            splitter = CharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
             docs_split = splitter.split_documents(docs)
             if not docs_split:
                 st.warning(f"No text chunks found after splitting {file.name}. Skipping.")
@@ -78,9 +82,10 @@ if st.session_state.vectordb:
         "text-generation",
         model="tiiuae/falcon-7b-instruct",
         tokenizer="tiiuae/falcon-7b-instruct",
-        device=-1,  
-        max_length=512,
+        device=-1,
+        max_new_tokens=1024,
         temperature=0.1,
+        do_sample=False,
         use_auth_token=hf_token
     )
     llm = HuggingFacePipeline(pipeline=pipe)
@@ -88,20 +93,20 @@ if st.session_state.vectordb:
     prompt = PromptTemplate(
         input_variables=["context", "question"],
         template="""
-You are a helpful assistant. Use the context below to answer the question concisely.
+You are a helpful assistant. Use the context below to answer the question in full sentences and provide complete explanations.
 If the answer is not in the context, say "I don't know".
 
 Context:
 {context}
 
 Question: {question}
-Answer:"""
+Answer:""",
     )
 
     qa = RetrievalQA.from_chain_type(
         llm=llm,
         retriever=st.session_state.vectordb.as_retriever(),
-        chain_type="map_reduce",
+        chain_type="stuff",
         chain_type_kwargs={"prompt": prompt}
     )
 
@@ -111,8 +116,8 @@ Answer:"""
         with st.spinner("Generating answer..."):
             try:
                 answer = qa.run(query)
-                st.write("**Answer:**")
-                st.write(answer)
+                st.markdown("**Answer:**")
+                st.markdown(answer)
             except Exception as e:
                 st.error(f"Error generating answer: {e}")
 else:
