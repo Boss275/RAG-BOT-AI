@@ -125,7 +125,7 @@ if "graph" in st.session_state and st.session_state.graph:
         with st.chat_message("assistant"):
             with st.spinner("Processing..."):
                 try:
-                    r = st.session_state.graph.invoke({"question": q})
+                    r = st.session_state.graph.run({"question": q})
                     with st.expander("Context Preview"):
                         for d in r["context"]:
                             st.write(d.page_content[:500]+"...")
