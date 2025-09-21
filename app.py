@@ -7,8 +7,11 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQA
 from langchain_community.llms import HuggingFacePipeline
 from transformers import pipeline
+from langchain.prompts import PromptTemplate
 
 st.title("📄 RAG PDF Chatbot (Local Hugging Face)")
+
+hf_token = st.secrets["HUGGINGFACE_API_TOKEN"]
 
 uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
 
@@ -30,7 +33,7 @@ def load_vectorstore(files):
                 st.warning(f"No content found in {file.name}. Skipping.")
                 continue
 
-            splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+            splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
             docs_split = splitter.split_documents(docs)
             if not docs_split:
                 st.warning(f"No text chunks found after splitting {file.name}. Skipping.")
@@ -62,7 +65,7 @@ if "vectordb" not in st.session_state:
     st.session_state.vectordb = None
 
 if uploaded_files:
-    with st.spinner("Processing your PDFs..."):
+    with st.spinner("Processing your documents..."):
         vectordb = load_vectorstore(uploaded_files)
         if vectordb is None:
             st.error("Failed to process and embed documents.")
@@ -70,22 +73,21 @@ if uploaded_files:
             st.session_state.vectordb = vectordb
             st.success("✅ Documents processed and ready!")
 
-    if st.session_state.vectordb:
-        pipe = pipeline(
-            "text-generation",
-            model="google/flan-t5-small",
-            tokenizer="google/flan-t5-small",
-            device=-1,
-            max_length=256,
-            temperature=0.1
-        )
-        llm = HuggingFacePipeline(pipeline=pipe)
+if st.session_state.vectordb:
+    pipe = pipeline(
+        "text-generation",
+        model="tiiuae/falcon-7b-instruct",
+        tokenizer="tiiuae/falcon-7b-instruct",
+        device=-1,  
+        max_length=512,
+        temperature=0.1,
+        use_auth_token=hf_token
+    )
+    llm = HuggingFacePipeline(pipeline=pipe)
 
-from langchain.prompts import PromptTemplate
-
-prompt = PromptTemplate(
-    input_variables=["context", "question"],
-    template="""
+    prompt = PromptTemplate(
+        input_variables=["context", "question"],
+        template="""
 You are a helpful assistant. Use the context below to answer the question concisely.
 If the answer is not in the context, say "I don't know".
 
@@ -94,24 +96,24 @@ Context:
 
 Question: {question}
 Answer:"""
-)
+    )
 
-qa = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=st.session_state.vectordb.as_retriever(),
-    chain_type="map_reduce",
-    chain_type_kwargs={"prompt": prompt}
-)
-        query = st.text_input("Ask a question about the uploaded PDFs:")
+    qa = RetrievalQA.from_chain_type(
+        llm=llm,
+        retriever=st.session_state.vectordb.as_retriever(),
+        chain_type="map_reduce",
+        chain_type_kwargs={"prompt": prompt}
+    )
 
-        if query:
-            with st.spinner("Generating answer..."):
-                try:
-                    answer = qa.run(query)
-                    st.write("**Answer:**")
-                    st.write(answer)
-                except Exception as e:
-                    st.error(f"Error generating answer: {e}")
+    query = st.text_input("Ask a question about the uploaded PDFs:")
+
+    if query:
+        with st.spinner("Generating answer..."):
+            try:
+                answer = qa.run(query)
+                st.write("**Answer:**")
+                st.write(answer)
+            except Exception as e:
+                st.error(f"Error generating answer: {e}")
 else:
     st.warning("Please upload one or more PDFs to get started.")
-
