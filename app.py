@@ -32,15 +32,32 @@ def load_vectorstore(files):
             loader = PyPDFLoader(file_path)
             docs = loader.load()
 
-            # Ensure that each doc is text (sometimes PyPDFLoader may return something else)
-            docs_text = [doc.page_content for doc in docs]
-            
+            if not docs:
+                st.warning(f"No content found in {file.name}. Skipping this file.")
+                continue
+
+            docs_text = []
+            for doc in docs:
+                if isinstance(doc, str):
+                    docs_text.append(doc)
+                else:
+                    docs_text.append(doc.page_content)
+
             splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
             docs_split = splitter.split_documents(docs_text)
+
+            if not docs_split:
+                st.warning(f"No text chunks found after splitting {file.name}. Skipping this file.")
+                continue
+
             all_docs.extend(docs_split)
         except Exception as e:
             st.error(f"Error processing file {file.name}: {e}")
             continue
+
+    if not all_docs:
+        st.error("No documents to process after splitting. Please check the uploaded PDFs.")
+        return None
 
     try:
         embeddings = OpenAIEmbeddings(openai_api_key=api_key)
