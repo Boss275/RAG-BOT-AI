@@ -29,9 +29,9 @@ class S(TypedDict):
 # Page setup
 # ─────────────────────────────────────────────
 
-st.set_page_config(page_title="RAG PDF Q&A Assistant", layout="wide")
-st.title("RAG AI BOT")
-st.caption("Upload your PDFs and ask questions about them.")
+st.set_page_config(page_title="📚 RAG PDF Q&A Assistant", layout="wide")
+st.title("🤖 RAG AI BOT")
+st.caption("📄 Upload your PDFs and ask me anything about them!")
 
 # ─────────────────────────────────────────────
 # OCR fallback for scanned PDFs
@@ -60,7 +60,7 @@ def split_text(files) -> List[Document]:
             loader = PyPDFLoader(tmp_path)
             docs = loader.load()
             if all("studyplusplus" in d.page_content.lower() for d in docs):
-                st.warning(f"OCR used for {f.name}")
+                st.warning(f"🔍 OCR was used for **{f.name}** due to scan-based content.")
                 docs = ocr_pdf(tmp_path)
         finally:
             os.remove(tmp_path)
@@ -81,7 +81,7 @@ def get_emb():
 
 def make_store(embed, docs):
     if not docs:
-        raise ValueError("No documents to index")
+        raise ValueError("No documents to index 🤷")
     return FAISS.from_documents(documents=docs, embedding=embed)
 
 # ─────────────────────────────────────────────
@@ -113,12 +113,12 @@ if "mems" not in st.session_state:
 # ─────────────────────────────────────────────
 
 with st.sidebar:
-    st.title("Settings")
-    key = st.text_input("Enter Groq API Key:", type="password")
-    model = st.selectbox("Select Model:", ["qwen/qwen3-32b", "gemma2-9b-it", "openai/gpt-oss-120b"])
-    temp = st.slider("Temp:", 0.0, 2.0, 0.7, 0.1)
+    st.title("⚙️ Settings")
+    key = st.text_input("🔑 Enter your **Groq API Key**:", type="password")
+    model = st.selectbox("🧠 Choose a model:", ["qwen/qwen3-32b", "gemma2-9b-it", "openai/gpt-oss-120b"])
+    temp = st.slider("🎛️ Response creativity (temperature):", 0.0, 2.0, 0.7, 0.1)
 
-    if st.button("New Session"):
+    if st.button("✨ Start New Chat"):
         sid = f"session_{len(st.session_state.mems)+1}"
         st.session_state.mems[sid] = ConversationBufferMemory(memory_key="chat_history", input_key="question", return_messages=True)
         st.session_state.sid = sid
@@ -127,7 +127,7 @@ with st.sidebar:
         st.session_state.mems["default"] = ConversationBufferMemory(memory_key="chat_history", input_key="question", return_messages=True)
         st.session_state.sid = "default"
 
-    sid = st.selectbox("Session", list(st.session_state.mems.keys()), index=len(st.session_state.mems)-1)
+    sid = st.selectbox("💬 Active Session:", list(st.session_state.mems.keys()), index=len(st.session_state.mems)-1)
     st.session_state.sid = sid
 
 # ─────────────────────────────────────────────
@@ -135,17 +135,17 @@ with st.sidebar:
 # ─────────────────────────────────────────────
 
 if not key:
-    st.warning("Please enter API Key")
+    st.warning("⚠️ Please enter your API key in the sidebar to get started.")
     st.stop()
 
 # ─────────────────────────────────────────────
 # File upload and processing
 # ─────────────────────────────────────────────
 
-files = st.file_uploader("Upload your desired PDF(s)", accept_multiple_files=True)
+files = st.file_uploader("📤 Upload your PDF(s) below:", accept_multiple_files=True)
 
-if st.button("Process your PDF(s)") and files:
-    with st.spinner("Processing..."):
+if st.button("🛠️ Process PDF(s)") and files:
+    with st.spinner("⏳ Processing your PDF(s)... hang tight!"):
         p = hub.pull("rlm/rag-prompt")
         llm = ChatGroq(model=model, api_key=key, temperature=temp)
         parser = StrOutputParser()
@@ -163,7 +163,7 @@ if st.button("Process your PDF(s)") and files:
         g.add_edge("retrieve", "generate")
         st.session_state.graph = g.compile()
 
-        st.success("The PDF(s) are now processed. You can ask questions below.")
+        st.success("✅ Your PDFs are ready! You can now ask questions in the chat below. 💬")
 
 # ─────────────────────────────────────────────
 # Display previous chat history
@@ -183,14 +183,14 @@ if h := st.session_state.mems[st.session_state.sid].chat_memory.messages:
 # ─────────────────────────────────────────────
 
 if "graph" in st.session_state:
-    if q := st.chat_input("Ask a question:"):
+    if q := st.chat_input("❓ Ask me anything about your PDFs!"):
         with st.chat_message("user"):
             st.markdown(q)
         with st.chat_message("assistant"):
-            with st.spinner("Finding answer..."):
+            with st.spinner("🔍 Thinking... just a sec!"):
                 r = st.session_state.graph.invoke({"question": q})
-                with st.expander("Context Preview"):
+                with st.expander("📚 Context Preview"):
                     for d in r["context"]:
                         st.write(d.page_content[:500] + "...")
-                st.subheader("Answer:")
+                st.subheader("🧠 Answer:")
                 st.markdown(r["answer"])
